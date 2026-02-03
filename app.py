@@ -16,12 +16,31 @@ st.set_page_config(
 # Server configuration
 MODEL_SERVER_URL = "http://localhost:8508"
 
-# Custom CSS
+# PDF support using PyMuPDF (no poppler needed!)
+try:
+    import fitz  # PyMuPDF
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
+
+def convert_pdf_to_images(pdf_path, dpi=150):
+    """Convert PDF to images using PyMuPDF"""
+    doc = fitz.open(pdf_path)
+    images = []
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        mat = fitz.Matrix(dpi/72, dpi/72)
+        pix = page.get_pixmap(matrix=mat)
+        img_data = pix.tobytes("png")
+        img = Image.open(io.BytesIO(img_data))
+        images.append(img)
+    doc.close()
+    return images
+
+# Custom CSS (same as before)
 st.markdown("""
     <style>
-    .main {
-        padding: 2rem;
-    }
+    .main { padding: 2rem; }
     .stButton>button {
         background-color: #FF4B4B;
         color: white;
@@ -29,114 +48,61 @@ st.markdown("""
         padding: 0.5rem 1rem;
         font-weight: 600;
     }
-    .result-box {
-        background-color: #f0f2f6;
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin-top: 1rem;
-    }
-    .sample-card {
-        border: 2px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 15px;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    .sample-card:hover {
-        border-color: #FF4B4B;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# Sample configurations - maps sample to optimal task type
+# Sample configurations
 SAMPLE_CONFIGS = {
     "1_text_recognition.png": {
         "name": "Text Recognition",
         "task": "Text Recognition",
         "prompt": "Text Recognition:",
-        "description": "General text extraction"
     },
     "2_table_recognition.png": {
         "name": "Table Recognition",
         "task": "Table Recognition (HTML)",
         "prompt": "Table Recognition:",
-        "description": "Extract as HTML table"
     },
     "3_invoice_receipt.png": {
         "name": "Invoice/Receipt",
         "task": "Invoice/Receipt (JSON)",
-        "prompt": """Please extract the following information in JSON format:
+        "prompt": """Please extract in JSON format:
 {
   "invoice_number": "",
   "date": "",
-  "bill_to": {
-    "name": "",
-    "address": ""
-  },
-  "items": [
-    {
-      "description": "",
-      "quantity": "",
-      "price": "",
-      "total": ""
-    }
-  ],
-  "subtotal": "",
-  "tax": "",
-  "tax_rate": "",
-  "total": "",
-  "payment_terms": "",
-  "due_date": ""
+  "bill_to": {"name": "", "address": ""},
+  "items": [{"description": "", "quantity": "", "price": "", "total": ""}],
+  "subtotal": "", "tax": "", "total": ""
 }""",
-        "description": "Structured JSON extraction"
     },
     "4_math_formulas.png": {
         "name": "Math Formulas",
         "task": "Math Formulas (LaTeX)",
         "prompt": "Extract all mathematical formulas in LaTeX format:",
-        "description": "LaTeX notation"
     },
     "5_form_recognition.png": {
         "name": "Form Recognition",
         "task": "Form Fields (JSON)",
-        "prompt": """Please extract all form fields in JSON format:
+        "prompt": """Extract form fields in JSON:
 {
   "form_title": "",
-  "fields": [
-    {
-      "field_name": "",
-      "field_value": ""
-    }
-  ],
-  "checkboxes": [
-    {
-      "option": "",
-      "checked": false
-    }
-  ],
-  "signature": "",
-  "signature_date": ""
+  "fields": [{"field_name": "", "field_value": ""}],
+  "checkboxes": [{"option": "", "checked": false}]
 }""",
-        "description": "Form data as JSON"
     },
     "6_handwriting_sample.png": {
         "name": "Handwriting",
         "task": "Handwriting Recognition",
         "prompt": "Handwriting Recognition:",
-        "description": "Handwritten text extraction"
     },
     "7_document_understanding.png": {
         "name": "Document Understanding",
         "task": "Document Understanding",
-        "prompt": "Please extract and summarize all key information from this document:",
-        "description": "Comprehensive document analysis"
+        "prompt": "Please extract and summarize all key information:",
     }
 }
 
 def check_server_status():
-    """Check if model server is running"""
     try:
         response = requests.get(f"{MODEL_SERVER_URL}/", timeout=2)
         return response.json()
@@ -144,7 +110,6 @@ def check_server_status():
         return None
 
 def process_image_api(image, prompt):
-    """Send image to model server for processing"""
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
@@ -162,13 +127,10 @@ def process_image_api(image, prompt):
     return response.json()
 
 def render_result(output, task_type):
-    """Render output based on task type"""
     if "Table Recognition" in task_type:
         st.markdown("### 📊 Table Output")
-
-        with st.expander("📝 View HTML Source"):
+        with st.expander("📝 HTML Source"):
             st.code(output, language="html")
-
         st.markdown("### Rendered Table")
         try:
             st.markdown(output, unsafe_allow_html=True)
@@ -176,9 +138,7 @@ def render_result(output, task_type):
             st.warning("Could not render HTML")
 
     elif "(JSON)" in task_type:
-        st.markdown("### 📋 Structured JSON Output")
-
-        # Extract JSON from markdown code blocks
+        st.markdown("### 📋 JSON Output")
         json_match = re.search(r'```json\s*(.*?)\s*```', output, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
@@ -186,116 +146,70 @@ def render_result(output, task_type):
             json_match = re.search(r'\{.*\}', output, re.DOTALL)
             json_str = json_match.group(0) if json_match else output
 
-        # Display formatted JSON
         st.code(json_str, language="json")
 
-        # Parse and display as interactive tree
         try:
             parsed = json.loads(json_str)
-            with st.expander("🌲 Interactive JSON Tree"):
+            with st.expander("🌲 JSON Tree"):
                 st.json(parsed)
         except:
             pass
 
     elif "LaTeX" in task_type or "Formula" in task_type:
         st.markdown("### 🔢 Math Formulas")
-
-        # Show rendered LaTeX
-        st.markdown("### 📐 Rendered Formulas")
-
-        # Extract formulas (look for lines with math symbols)
+        st.markdown("### 📐 Rendered")
         lines = output.split('\n')
         for line in lines:
             stripped = line.strip()
-            # Skip empty lines and headers
-            if not stripped or any(x in stripped.lower() for x in ['test:', 'formula', 'theorem', 'equation']):
-                continue
-
-            # If line contains math, try to render it
-            if any(char in stripped for char in ['=', '^', '∫', '±', 'sqrt', 'frac']):
+            if stripped and any(char in stripped for char in ['=', '^', '∫', '±', 'sqrt', 'frac']):
                 try:
                     st.latex(stripped)
                 except:
-                    st.code(stripped, language="latex")
+                    st.code(stripped)
 
-        # Show raw LaTeX code
-        st.markdown("---")
-        with st.expander("📝 View LaTeX Source Code"):
+        with st.expander("📝 LaTeX Source"):
             st.code(output, language="latex")
 
     else:
-        st.markdown("### 📄 Extracted Content")
-
-        # Show as markdown
-        with st.expander("📝 Markdown View"):
+        st.markdown("### 📄 Output")
+        with st.expander("📝 Markdown"):
             st.markdown(output)
-
-        # Show raw text
         st.code(output, language="text")
 
 # Main UI
 st.title("🔍 GLM-OCR Suite")
-st.markdown("### High-Performance OCR with Auto-Detection")
+st.markdown("### Demo & Testing App")
 st.markdown("---")
 
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Status")
 
-    # Server status
     server_status = check_server_status()
 
     if server_status and server_status.get('model_loaded'):
-        st.success("✅ Model Server Online")
-        st.info(f"🎮 GPU: {server_status.get('device', 'Unknown')}")
+        st.success("✅ Server Online")
+        st.info(f"🎮 GPU: {server_status.get('device')}")
     else:
         st.error("❌ Server Offline")
-        st.code("python glm_ocr_server.py", language="bash")
+        st.code("python server.py")
 
     st.markdown("---")
 
-    # Manual task override
-    st.header("🎯 Advanced Options")
-
-    use_auto_detect = st.checkbox(
-        "Auto-detect task type",
-        value=True,
-        help="Automatically select the best extraction method based on the sample"
-    )
-
-    manual_task = None
-    if not use_auto_detect:
-        manual_task = st.selectbox(
-            "Manual task override:",
-            [
-                "Text Recognition",
-                "Table Recognition (HTML)",
-                "Invoice/Receipt (JSON)",
-                "Form Fields (JSON)",
-                "Math Formulas (LaTeX)",
-                "Handwriting Recognition",
-                "Document Understanding"
-            ]
-        )
-
-    st.markdown("---")
-
-    # Info
     with st.expander("ℹ️ About", expanded=True):
         st.markdown("""
-        **GLM-OCR** - State-of-the-art OCR
+        **GLM-OCR** by Zhipu AI
 
-        - 🏆 #1 on OmniDocBench V1.5 (94.62)
+        Released: **February 3, 2026** 🆕
+
+        - 🏆 #1 OmniDocBench (94.62)
         - ⚡ 0.9B params, ~2.5GB VRAM
-        - 🎯 Multiple specialized tasks
-        - 🌍 **Multilingual**: Chinese, English, French, Spanish, Russian, German, Japanese, Korean, etc.
-        - 📊 Output: HTML, JSON, LaTeX, Markdown
-        - 🚀 Fast: 1.86 pages/s (PDF), 0.67 img/s
-        - 💰 Cost: $0.03 per million tokens
+        - 🌍 Multilingual: CN, EN, FR, ES, RU, DE, JP, KR...
+        - 📊 Output: HTML, JSON, LaTeX, MD
+        - 📄 PDF: Up to 100 pages, 50MB
+        - 🚀 Speed: 1.86 pages/s
 
-        **Model:** zai-org/GLM-OCR (0.9B)
-        **License:** MIT
-        **Docs:** https://docs.z.ai
+        [HuggingFace](https://huggingface.co/zai-org/GLM-OCR) | [Docs](https://docs.z.ai)
         """)
 
 # Main content
@@ -304,17 +218,17 @@ col1, col2 = st.columns([1, 1])
 with col1:
     st.header("📤 Input")
 
-    # Image source selection
-    upload_method = st.radio(
-        "Choose source:",
-        ["Sample Gallery", "Upload Image"],
+    input_type = st.radio(
+        "Choose input type:",
+        ["Sample Gallery", "Upload Image", "Upload PDF"],
         horizontal=True
     )
 
     uploaded_image = None
     selected_config = None
+    pdf_mode = False
 
-    if upload_method == "Upload Image":
+    if input_type == "Upload Image":
         uploaded_file = st.file_uploader(
             "Upload an image",
             type=["png", "jpg", "jpeg", "bmp", "tiff"]
@@ -322,14 +236,88 @@ with col1:
         if uploaded_file:
             uploaded_image = Image.open(uploaded_file)
 
-            # Auto-process on upload
-            if server_status and server_status.get('model_loaded'):
-                # Use default text recognition for uploaded images
-                if 'last_uploaded' not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
-                    st.session_state.last_uploaded = uploaded_file.name
-                    st.session_state.trigger_process = True
-                    st.session_state.process_prompt = "Text Recognition:"
-                    st.session_state.process_task = "Text Recognition"
+    elif input_type == "Upload PDF":
+        if not PDF_SUPPORT:
+            st.warning("⚠️ PDF support requires PyMuPDF")
+            st.code("pip install PyMuPDF")
+            st.info("PyMuPDF works out-of-the-box on Windows (no poppler needed!)")
+        else:
+            # Sample or upload option
+            pdf_option = st.radio(
+                "Choose PDF:",
+                ["Sample PDF (3 pages)", "Upload Your PDF"],
+                horizontal=True
+            )
+
+            temp_pdf = None
+
+            if pdf_option == "Sample PDF (3 pages)":
+                sample_pdf = "samples/sample_document.pdf"
+                if os.path.exists(sample_pdf):
+                    temp_pdf = sample_pdf
+                    st.success("✓ Using sample: Text, Tables, Formulas")
+                else:
+                    st.error("Sample PDF not found")
+            else:
+                pdf_file = st.file_uploader(
+                    "Upload PDF (max 50MB, 100 pages)",
+                    type=["pdf"]
+                )
+                if pdf_file:
+                    temp_pdf = "temp_upload.pdf"
+                    with open(temp_pdf, 'wb') as f:
+                        f.write(pdf_file.read())
+
+            if temp_pdf:
+                pdf_mode = True
+
+                # Convert PDF to images
+                try:
+                    images = convert_pdf_to_images(temp_pdf, dpi=150)
+                    st.success(f"✓ PDF loaded: {len(images)} pages")
+
+                    max_pages = st.slider("Pages to process:", 1, min(len(images), 100), min(5, len(images)))
+
+                    # Show first page preview
+                    st.markdown("### Preview (Page 1)")
+                    st.image(images[0], use_column_width=True)
+
+                    # Select task
+                    task_type = st.selectbox("Task:", [
+                        "Text Recognition",
+                        "Table Recognition (HTML)",
+                        "Document Understanding"
+                    ])
+
+                    if st.button("🚀 Process PDF"):
+                        with col2:
+                            st.header("📋 Results")
+                            progress = st.progress(0)
+
+                            for i, img in enumerate(images[:max_pages]):
+                                progress.progress((i + 1) / max_pages)
+                                st.markdown(f"### 📄 Page {i+1}/{max_pages}")
+
+                                # Get prompt
+                                prompts = {
+                                    "Text Recognition": "Text Recognition:",
+                                    "Table Recognition (HTML)": "Table Recognition:",
+                                    "Document Understanding": "Extract all key information:"
+                                }
+                                prompt = prompts.get(task_type, "Text Recognition:")
+
+                                result = process_image_api(img, prompt)
+                                if result.get('success'):
+                                    # Simple display without nested expanders
+                                    output = result['output']
+                                    if "Table" in task_type:
+                                        st.markdown(output, unsafe_allow_html=True)
+                                    else:
+                                        st.code(output, language="text")
+                                    st.markdown("---")
+
+                except Exception as e:
+                    st.error(f"Error processing PDF: {str(e)}")
 
     else:  # Sample Gallery
         samples_dir = "samples"
@@ -338,9 +326,8 @@ with col1:
                           if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
 
             if sample_files:
-                st.markdown("#### 🖼️ Sample Gallery - Click to Process")
+                st.markdown("#### 🖼️ Gallery - Click to Process")
 
-                # Display gallery
                 cols_per_row = 2
                 for i in range(0, len(sample_files), cols_per_row):
                     cols = st.columns(cols_per_row)
@@ -352,8 +339,7 @@ with col1:
                                 config = SAMPLE_CONFIGS.get(sample_file, {
                                     "name": sample_file,
                                     "task": "Text Recognition",
-                                    "prompt": "Text Recognition:",
-                                    "description": "Text extraction"
+                                    "prompt": "Text Recognition:"
                                 })
 
                                 sample_path = os.path.join(samples_dir, sample_file)
@@ -362,18 +348,13 @@ with col1:
 
                                 st.image(img, use_column_width=True)
                                 st.markdown(f"**{config['name']}**")
-                                st.caption(config['description'])
 
-                                # One-click process button
                                 if st.button(f"🚀 Process", key=f"btn_{idx}"):
-                                    # Load image
                                     st.session_state.current_image = Image.open(sample_path)
                                     st.session_state.current_config = config
-                                    # Trigger processing
                                     st.session_state.trigger_process = True
                                     st.rerun()
 
-                # Show selected image if any
                 if 'current_image' in st.session_state and 'current_config' in st.session_state:
                     uploaded_image = st.session_state.current_image
                     selected_config = st.session_state.current_config
@@ -382,83 +363,59 @@ with col1:
                     st.success(f"✓ Selected: {selected_config['name']}")
                     st.info(f"🎯 Task: {selected_config['task']}")
 
-    # Display image
-    if uploaded_image:
+    # Display and process
+    if uploaded_image and not pdf_mode:
         st.markdown("### 🖼️ Input Image")
         st.image(uploaded_image, use_column_width=True)
 
-        # Auto-process if triggered
         if server_status and server_status.get('model_loaded'):
             if st.session_state.get('trigger_process', False):
-                # Get prompt
-                if selected_config:
-                    # Use auto-detected prompt unless manual override
-                    if use_auto_detect or not manual_task:
-                        prompt = selected_config['prompt']
-                        task_name = selected_config['task']
-                    else:
-                        # Manual override - need to map to prompt
-                        task_name = manual_task
-                        # Get prompt from config (reuse logic)
-                        prompt = "Text Recognition:"  # Default
-                else:
-                    prompt = st.session_state.get('process_prompt', "Text Recognition:")
-                    task_name = st.session_state.get('process_task', "Text Recognition")
-
-                # Clear trigger
                 st.session_state.trigger_process = False
 
-                # Process
+                prompt = selected_config['prompt'] if selected_config else "Text Recognition:"
+                task_name = selected_config['task'] if selected_config else "Text Recognition"
+
                 with col2:
                     st.header("📋 Results")
-                    with st.spinner(f"Processing with {task_name}..."):
+                    with st.spinner(f"Processing..."):
                         try:
                             result = process_image_api(uploaded_image, prompt)
 
                             if result.get('success'):
-                                output = result['output']
-                                render_result(output, task_name)
+                                render_result(result['output'], task_name)
 
-                                # Download button
                                 file_ext = "json" if "(JSON)" in task_name else "html" if "Table" in task_name else "txt"
                                 st.download_button(
                                     "💾 Download",
-                                    output,
-                                    file_name=f"result.{file_ext}",
-                                    mime="application/json" if file_ext == "json" else "text/plain"
+                                    result['output'],
+                                    file_name=f"result.{file_ext}"
                                 )
                             else:
-                                st.error(f"❌ Error: {result.get('error')}")
+                                st.error(f"Error: {result.get('error')}")
 
                         except Exception as e:
-                            st.error(f"❌ Error: {str(e)}")
-        else:
-            st.warning("⚠️ Start model server first: `python glm_ocr_server.py`")
+                            st.error(f"Error: {str(e)}")
 
 with col2:
-    if 'current_image' not in st.session_state:
+    if 'current_image' not in st.session_state and not pdf_mode:
         st.header("📋 Results")
-        st.info("👈 Select a sample to see results")
+        st.info("👈 Select a sample to process")
 
-        st.markdown("### 🎯 Available Tasks")
+        st.markdown("### 🎯 Capabilities")
+        st.markdown("""
+        - 📄 **Text**: General extraction
+        - 📊 **Tables**: HTML structure
+        - 🧾 **Invoices**: JSON with items/totals
+        - 📋 **Forms**: JSON fields/checkboxes
+        - 🔢 **Math**: LaTeX formulas
+        - ✍️ **Handwriting**: Sticky notes, letters
+        - 📚 **Documents**: Comprehensive analysis
+        - 📄 **PDF**: Multi-page processing
+        """)
 
-        tasks = {
-            "📄 Text Recognition": "Extract all text content",
-            "📊 Table → HTML": "Tables as structured HTML",
-            "🧾 Invoice → JSON": "Invoices with structured fields",
-            "📋 Forms → JSON": "Form fields and values",
-            "🔢 Math → LaTeX": "Formulas in LaTeX notation",
-            "✍️ Handwriting": "Handwritten text recognition",
-            "📚 Documents": "Comprehensive understanding"
-        }
-
-        for task, desc in tasks.items():
-            st.markdown(f"**{task}**: {desc}")
-
-# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>Powered by GLM-OCR (zai-org) | Auto-Task Detection | GPU Accelerated</p>
+    <p>Powered by <a href="https://huggingface.co/zai-org/GLM-OCR">GLM-OCR</a> | GPU Accelerated</p>
 </div>
 """, unsafe_allow_html=True)
