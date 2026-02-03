@@ -13,8 +13,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# Server configuration
-MODEL_SERVER_URL = "http://localhost:8508"
+# Server configuration (use env var for Docker, fallback to localhost for dev)
+MODEL_SERVER_URL = os.getenv("MODEL_SERVER_URL", "http://localhost:8508")
 
 # PDF support using PyMuPDF (no poppler needed!)
 try:

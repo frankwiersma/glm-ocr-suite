@@ -1,0 +1,33 @@
+services:
+  server:
+    build: .
+    runtime: nvidia
+    ports:
+      - "8508:8508"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - model-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8508/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Model takes time to load
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      - MODEL_SERVER_URL=http://server:8508
+    restart: unless-stopped
+
+volumes:
+  model-cache:
+    name: glm-ocr-model-cache

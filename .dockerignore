@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Samples and docs (optional, remove if you want them in container)
+# samples/
+
+# Temp files
+*.tmp
+temp_*.png
